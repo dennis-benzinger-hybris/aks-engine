@@ -42,8 +42,24 @@ func GetKubernetesVariables(cs *api.ContainerService) (map[string]interface{}, e
 		return k8sVars, err
 	}
 
+	// Variables which use the `copy` functionality must be grouped under the name `copy`.
+	// So far we need this only for the master variables but this prepares us for `copy` being used in other sections.
+	var copyVariables []map[string]string
+
 	for k, v := range masterVars {
-		k8sVars[k] = v
+		if k == "copy" {
+			vAsArray, vIsArray := v.([]map[string]string)
+
+			if vIsArray {
+				copyVariables = append(copyVariables, vAsArray...)
+			}
+		} else {
+			k8sVars[k] = v
+		}
+	}
+
+	if len(copyVariables) > 0 {
+		k8sVars["copy"] = copyVariables
 	}
 
 	telemetryVars := getTelemetryVars(cs)
@@ -294,6 +310,17 @@ func getK8sMasterVars(cs *api.ContainerService) (map[string]interface{}, error) 
 		masterVars["etcdServerCertFilepath"] = "/etc/kubernetes/certs/etcdserver.crt"
 		masterVars["etcdServerKeyFilepath"] = "/etc/kubernetes/certs/etcdserver.key"
 	}
+
+	if kubernetesConfig.SystemAssignedIDEnabled() {
+		masterVars["copy"] = []map[string]string{
+			{
+				"name":  "vmasRoleAssignmentNames",
+				"count": "[variables('masterCount')]",
+				"input": "[resourceId('Microsoft.Authorization/roleAssignments', guid(concat('Microsoft.Compute/virtualMachines/', variables('masterVMNamePrefix'), copyIndex('vmasRoleAssignmentNames', variables('masterOffset')), 'vmidentity')))]",
+			},
+		}
+	}
+
 	if useManagedIdentity && !isHostedMaster {
 		masterVars["servicePrincipalClientId"] = "msi"
 		masterVars["servicePrincipalClientSecret"] = "msi"
@@ -591,6 +618,8 @@ func getK8sAgentVars(cs *api.ContainerService, profile *api.AgentPoolProfile) ma
 	agentOsImageName := fmt.Sprintf("%sosImageName", agentName)
 	agentOsImageResourceGroup := fmt.Sprintf("%sosImageResourceGroup", agentName)
 
+	agentVMSSSysRoleAssignmentName := fmt.Sprintf("%sVMSSSysRoleAssignmentName", agentName)
+
 	if profile.IsStorageAccount() {
 		agentVars[storageAccountOffset] = fmt.Sprintf("[mul(variables('maxStorageAccountsPerAgent'),variables('%sIndex'))]", agentName)
 		agentVars[storageAccountsCount] = fmt.Sprintf("[add(div(variables('%[1]sCount'), variables('maxVMsPerStorageAccount')), mod(add(mod(variables('%[1]sCount'), variables('maxVMsPerStorageAccount')),2), add(mod(variables('%[1]sCount'), variables('maxVMsPerStorageAccount')),1)))]", agentName)
@@ -630,6 +659,11 @@ func getK8sAgentVars(cs *api.ContainerService, profile *api.AgentPoolProfile) ma
 	agentVars[agentOsImageVersion] = fmt.Sprintf("[parameters('%sosImageVersion')]", agentName)
 	agentVars[agentOsImageName] = fmt.Sprintf("[parameters('%sosImageName')]", agentName)
 	agentVars[agentOsImageResourceGroup] = fmt.Sprintf("[parameters('%sosImageResourceGroup')]", agentName)
+
+	if cs.Properties.OrchestratorProfile.KubernetesConfig.SystemAssignedIDEnabled() &&
+			profile.IsVirtualMachineScaleSets() {
+		agentVars[agentVMSSSysRoleAssignmentName] = fmt.Sprintf("[resourceId('Microsoft.Authorization/roleAssignments', guid(concat('Microsoft.Compute/virtualMachineScaleSets/', variables('%[1]sVMNamePrefix'), 'vmidentity')))]", agentName)
+	}
 
 	return agentVars
 }

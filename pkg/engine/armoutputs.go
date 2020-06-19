@@ -5,6 +5,7 @@ package engine
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/Azure/aks-engine/pkg/api"
 	"github.com/Azure/aks-engine/pkg/api/common"
@@ -84,6 +85,51 @@ func GetKubernetesOutputs(cs *api.ContainerService) map[string]interface{} {
 		outputs["appGwIdentityClientId"] = map[string]interface{}{
 			"type":  "string",
 			"value": "[reference(variables('appGwICIdentityId'), variables('apiVersionManagedIdentity')).clientId]",
+		}
+	}
+
+	if cs.Properties.OrchestratorProfile.KubernetesConfig.SystemAssignedIDEnabled() {
+		outputValue := "variables('vmasRoleAssignmentNames')"
+
+		if cs.Properties.MasterProfile.IsAvailabilitySet() {
+
+			// These master role assignments for agent pools have to directly here and can't be put into a variable first.
+			// The reason is that they need the `reference` function which can't be used in a variable.
+			var masterRoleAssignmentForAgentPools []string
+
+			for _, agentPool := range cs.Properties.AgentPoolProfiles {
+				resourceGroup := fmt.Sprintf("variables('%sSubnetResourceGroup')", agentPool.Name)
+
+				for masterIdx := 0; masterIdx < cs.Properties.MasterProfile.Count; masterIdx++ {
+					masterVMReference := fmt.Sprintf("reference(resourceId(resourceGroup().name, 'Microsoft.Compute/virtualMachines', concat(variables('masterVMNamePrefix'), %d)), '2017-03-30', 'Full').identity.principalId", masterIdx)
+
+					masterRoleAssignmentForAgentPools = append(masterRoleAssignmentForAgentPools,
+						fmt.Sprintf("resourceId(%s, 'Microsoft.Network/virtualNetworks/providers/roleAssignments', variables('%sVnet'), 'Microsoft.Authorization', guid(uniqueString(%s)))",
+							resourceGroup, agentPool.Name, masterVMReference))
+				}
+			}
+
+			outputValue += ", createArray(" + strings.Join(masterRoleAssignmentForAgentPools, ", ") + ")"
+		}
+
+		var vmssSysRoleAssignmentVariables []string
+
+		for _, profile := range cs.Properties.AgentPoolProfiles {
+			if profile.IsVirtualMachineScaleSets() {
+				vmssSysRoleAssignmentVariables = append(vmssSysRoleAssignmentVariables,
+					fmt.Sprintf("variables('%sVMSSSysRoleAssignmentName')", profile.Name))
+			}
+		}
+
+		if len(vmssSysRoleAssignmentVariables) > 0 {
+			outputValue += ", createArray(" + strings.Join(vmssSysRoleAssignmentVariables, ", ") + ")"
+		}
+
+		// TODO: Rename this output and all contributing variables (ARM & Go) to "ids".
+
+		outputs["roleAssignmentNames"] = map[string]string {
+			"type":  "array",
+			"value": fmt.Sprintf("[concat(%s)]", outputValue),
 		}
 	}
 

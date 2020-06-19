@@ -88,6 +88,14 @@ func createKubernetesMasterRoleAssignmentForAgentPools(masterProfile *api.Master
 		dependenciesToMasterVms[masterIdx] = fmt.Sprintf("[concat(variables('masterVMNamePrefix'), %d)]", masterIdx)
 	}
 
+	// TODO: Make this work if two agent pools share the same vnet.
+	//       Currently the role assignments are created per agent pool and if they
+  //       target the same vnet the deployment fails with:
+  //
+  //       {\r\n    \"code\": \"RoleAssignmentExists\",\r\n    \"message\": \"The role assignment already exists.\"\r\n  }\r\n}
+  //
+  //       This probably got broken in https://github.com/Azure/aks-engine/pull/2583.
+
 	var roleAssignmentsForAllAgentPools = make([]DeploymentWithResourceGroupARM, len(agentPoolProfiles))
 
 	// The following is based on:
